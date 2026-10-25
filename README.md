@@ -1,23 +1,27 @@
 # eM Client CrossOver Stabilization
 
 IL-level binary patches (applied via [Mono.Cecil](https://github.com/jbevain/cecil), no source
-access needed) that fix real bugs in [eM Client](https://www.emclient.com/) 10.4.5674 when it
-runs under [CrossOver](https://www.codeweavers.com/crossover)/Wine on Linux — not a native Linux
-port, no source changes to eM Client itself, just targeted binary patches for the specific things
-Wine gets wrong.
+access needed) that fix real bugs in [eM Client](https://www.emclient.com/) 10.4.5674 and 11.0.1267
+when it runs under [CrossOver](https://www.codeweavers.com/crossover)/Wine on Linux — not a native
+Linux port, no source changes to eM Client itself, just targeted binary patches for the specific
+things Wine gets wrong.
 
 ## Quick start
 
 Already have eM Client installed in a CrossOver bottle? Patch it:
 
 ```bash
-./releases/10.4.5674/deploy.sh
+./releases/10.4.5674/deploy.sh      # eM Client 10.4.5674
+./releases/11.0.1267/deploy.sh      # eM Client 11.0.1267 (stable)
 ```
 
 That's it. It finds your bottle(s), checks the installed version matches, backs up the current
 files, rebuilds and re-verifies every patch fresh against your exact install, deploys, and rolls
 back cleanly if anything goes wrong. Safe to run more than once — it detects an already-patched
 install and does nothing.
+
+For eM Client 11, run `./releases/11.0.1267/install-msix.sh` first if it isn't installed yet — see
+[eM Client 11](#em-client-11) below.
 
 ```bash
 ./releases/10.4.5674/deploy.sh --list          # just show what bottles/versions it finds
@@ -76,15 +80,24 @@ opt-in because the same underlying fix was found to behave differently across ma
 testing; file-type associations are a separate feature entirely, controlled by
 `--install-associations`, not part of the patch numbering.
 
-## eM Client 11 (beta)
+## eM Client 11
 
-eM Client 11.0.196-beta is a separate, still-changing product build (new assembly set, targets
-.NET 10) tracked completely independently from the 10.4.5674 pipeline above — its own bottle, its
-own `releases/11.0.196-beta/deploy.sh`, its own findings reports. See `CLAUDE.md`'s "eM Client 11
-(beta) — separate release line" section for the full breakdown of what's shared (the patcher
-tool) versus kept separate (everything else).
+eM Client 11 is stable (as of October 2026) and is a separate product build from 10.4.5674 — a new
+assembly set targeting .NET 10, tracked completely independently from the 10.4.5674 pipeline
+above: its own bottle, its own `releases/11.0.1267/` folder, its own findings reports. See
+`CLAUDE.md`'s "eM Client 11 — separate release line" section for the full breakdown of what's
+shared (the patcher tool) versus kept separate (everything else).
 
-### `releases/11.0.196-beta/install-msix.sh` flags
+`releases/11.0.1267/` is the stable release line. All six patches were re-verified against
+`11.0.1267.0` on both x86 and x64: every `il-patcher` flag applies unmodified, every verification
+and handler check passes, and the only code change needed for the port was making Stage 7's
+`MailClient.deps.json` target key architecture-aware (it was hardcoded to `win-x86`, which left
+x64 installs with the helper entry under the wrong runtime target — see
+[emclient11-1267-stable-port-findings.md](reports/emclient11-1267-stable-port-findings.md)).
+The older beta line (`releases/11.0.196-beta/`, covering 11.0.196 and 11.0.282) is kept as a frozen
+historical reference; use `releases/11.0.1267/` for current installs.
+
+### `releases/11.0.1267/install-msix.sh` flags
 
 eM Client 11 ships as an MSIX package, which CrossOver/Wine can't install directly — run this
 *first* to get a clean install in place (see below), then `deploy.sh` to patch it.
@@ -102,7 +115,7 @@ eM Client 11 ships as an MSIX package, which CrossOver/Wine can't install direct
 | `--wine-manager crossover\|bottles` | Which Wine-prefix manager to install into — [CrossOver](https://www.codeweavers.com/crossover) or [Bottles](https://usebottles.com/). Auto-detected when only one is installed; prompted for otherwise (required under `-y` in that case). Under Bottles, `--new-bottle` creates one via `bottles-cli new` instead of `cxbottle --create` |
 | `-h`, `--help` | Full usage |
 
-### `releases/11.0.196-beta/deploy.sh` flags
+### `releases/11.0.1267/deploy.sh` flags
 
 Identical flag set to the 10.4.5674 script above, file-associations flags included — `--bottle`,
 `--list`, `-y`/`--yes`, `--force`, `--max-revision N`, `--patches LIST`, `--install-fonts`,
@@ -128,13 +141,13 @@ Patch 5 bundles both sync-freeze fixes together — they're decided and applied 
 
 Unlike the 10.4.5674 pipeline, eM Client 11 ships as an MSIX package, which CrossOver/Wine can't
 install directly — there's no classic installer to run inside the bottle. Get a clean install in
-place first with `releases/11.0.196-beta/install-msix.sh` (downloads the .NET 10 desktop runtime,
+place first with `releases/11.0.1267/install-msix.sh` (downloads the .NET 10 desktop runtime,
 resolves and downloads the current MSIX bundle, extracts it into the bottle by hand, and installs
 a set of ICU DLLs Wine doesn't provide but the app's spell-checker needs — without them, the app
 crashes on essentially every keystroke in a compose window; see
 [emclient11-icu-spellcheck-crash-findings.md](reports/emclient11-icu-spellcheck-crash-findings.md)
 — downloaded fresh each run, not vendored here, same as the .NET runtime above), then run
-`releases/11.0.196-beta/deploy.sh` (which `install-msix.sh` will offer to do for you) to apply the
+`releases/11.0.1267/deploy.sh` (which `install-msix.sh` will offer to do for you) to apply the
 patches above. The ICU fix is a missing OS component, not an eM Client bug, so it lives in
 `install-msix.sh` rather than as one of the patches in the table.
 

@@ -196,7 +196,40 @@ comment) — these snapshots exist purely as a read-only reference for diffing/i
 there's a specific reason to use another bottle (e.g. `emClient_win_7_x64_2`'s never-activated
 license state, kept available for licensing-related testing).
 
-## eM Client 11 (beta) — separate release line
+## eM Client 11 — separate release line
+
+**The current, supported eM Client 11 line is `releases/11.0.1267/` (stable).** eM Client 11 left
+beta in early October 2026; `11.0.1267.0` is the first stable build this project targets. The
+older `releases/11.0.196-beta/` folder and `original/em-11.0.196*`/`em-11.0.282*` snapshots are
+kept as a frozen historical reference (that script also still covers 11.0.282), but new installs
+should use the stable folder. Its `install-msix.sh` reads the stable update feed (no `?beta=true`)
+and pins the .NET 10.0.13 desktop runtime that matches this build. Every patch from the beta line
+was re-run against `11.0.1267.0` x86 and x64 before adding it: all 24 il-patcher flags apply
+unmodified, every verification/decompile/handler check passes, and a real end-to-end `deploy.sh`
+run reached stage mask 239 on both architectures. One port-specific bug was found and fixed:
+Stage 7's deps.json target key was hardcoded to `win-x86`, so on an x64 install the
+`MailClient.Wine` entry landed under a target the runtime never consults — now read from
+`MailClient.deps.json`'s own `runtimeTarget.name`. Full account:
+`reports/emclient11-1267-stable-port-findings.md`.
+
+Everything below (and everything above `original/em-10.4.5674/`, `releases/10.4.5674/`, the
+"Status" section) describes the beta line's own history. The same separation rules still apply to
+the stable line: never fold eM Client 11 fixes into `releases/10.4.5674/deploy.sh`, and never run
+one version's `deploy.sh` against another's bottle (each script's version gate warns and asks
+before proceeding against an unexpected `FileVersion`, but don't rely on that alone).
+
+- **`original/em-11.0.1267/`** and **`original/em-11.0.1267-x64/`** — pristine reference snapshots
+  for the stable build (`MailClient.dll` FileVersion `11.0.1267.0`, InformationalVersion
+  `11.0.1267+ca9fa42242`), extracted from the same `.msixbundle` (x86: 2549 files, x64: 2552).
+  The x86/x64 patch content is identical; only the deps.json runtime target differs (see the
+  Stage 7 port note above).
+- **`releases/11.0.1267/`** — the stable deploy/install pair, forked from the beta line. Its
+  `OUR_RELEASE_NUMBER_FOR_VERSION` contains only `11.0.1267`; the beta builds are deliberately not
+  accepted by this folder's version gate (use `releases/11.0.196-beta/` for those). Fonts,
+  file-type associations, Bottles support, the version marker, the patch grouping (1–4 and 6
+  mandatory, 5 optional), and every CLI flag are identical to the beta script.
+
+### Beta line (historical)
 
 Everything above (`original/em-10.4.5674/`, `releases/10.4.5674/`, the "Status" section below) is
 for eM Client **10.4.5674**. eM Client **11.0.196-beta** is a genuinely different, still-changing
@@ -632,6 +665,15 @@ but don't rely on that alone).
     `original/em-11.0.282/`, applied identically to both. Verified live via real synthesized
     clicks (`python3-xlib`'s `Xlib.ext.xtest`, the same newly-discovered technique used for the
     10.4.5674 sibling's own verification) against `emClient_11_beta_win_11`.
+  - `release/11.0.1267-1` — first release on the **stable** line (`releases/11.0.1267/`), ported
+    from the beta folder to eM Client `11.0.1267.0`. All 24 patch flags were run against both the
+    x86 and x64 snapshots; every one applied unmodified, and both a fresh `deploy.sh --patches
+    1,2,3,4,5,6` run and an idempotent re-run completed with all verification checks passing
+    (stage mask 239). Two port changes: `install-msix.sh` now reads the stable update feed and
+    pins .NET desktop runtime 10.0.13, and Stage 7's deps.json target key is read from the file
+    instead of hardcoded `win-x86` (a real x64 bug in the beta script — the entry landed under
+    `win-x86` while an x64 app resolves `win-x64`). Full verification notes:
+    `reports/emclient11-1267-stable-port-findings.md`.
 
 **Patches are now a curated grouping, not raw stage numbers** (same correction as the 10.4.5674
 sibling script — see its own note under its `## Status` section for the full rationale):
