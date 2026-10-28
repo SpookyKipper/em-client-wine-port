@@ -69,6 +69,13 @@
 #                                   prompted for ("Are you using CrossOver or Bottles?") when both
 #                                   or neither are found and this flag isn't given (under -y with
 #                                   neither/both found, this flag is required).
+#   EMCLIENT_DEPLOY_WORKDIR=/path   where to build the patch stages. By default the script picks
+#                                   the first of ${TMPDIR:-/tmp} and $HOME/.cache/em-client-wine-port
+#                                   that has ~5 GB free, preferring a disk-backed filesystem --
+#                                   /tmp is often a RAM-backed tmpfs. Filling that can exhaust
+#                                   system memory (the desktop may freeze until reboot), not just
+#                                   fail the patch. The explicit override is used as-is, with no
+#                                   free-space check.
 #
 # Safe to re-run: reads a MailClient.Wine.dll version marker (same mechanism as the 10.4.5674
 # pipeline -- see il-patches/MailClient.Wine/VersionMarker.cs) to tell which stages this bottle
@@ -436,15 +443,74 @@ check_dotnet
 # Workdir (self-cleaning: removed on success, left in place with its path
 # printed if anything fails or the script is interrupted, so it can be
 # inspected)
+#
+# Location: NOT unconditionally /tmp. On many Linux installs /tmp is a RAM-backed tmpfs, and
+# this pipeline's stage chain used to hold every intermediate directory at once -- easily 8-10 GB
+# for a full eM Client install. Filling tmpfs consumes RAM, which can make the whole desktop
+# unresponsive/thrash until reboot, not just fail the patch. Two changes since that was hit for
+# real: intermediate stage outputs are now pruned as soon as the next stage has consumed them
+# (see prune_stage_output below), bringing the peak down to roughly 3-4 GB for a full install;
+# and the workdir is placed on a disk-backed filesystem with enough free space, falling back to
+# $HOME/.cache when /tmp is tmpfs. Override with EMCLIENT_DEPLOY_WORKDIR=/path if needed (that
+# path is used as-is, no space check).
 # ---------------------------------------------------------------------------
 
-WORKDIR="$(mktemp -d /tmp/emclient11-deploy-XXXXXX)"
+WORKDIR_REQUIRED_MB=5120
+WORKDIR_BASE=""
+if [[ -n "${EMCLIENT_DEPLOY_WORKDIR:-}" ]]; then
+    mkdir -p "$EMCLIENT_DEPLOY_WORKDIR"
+    WORKDIR_BASE="$EMCLIENT_DEPLOY_WORKDIR"
+else
+    WORKDIR_CANDIDATES=("${TMPDIR:-/tmp}")
+    WORKDIR_CANDIDATES+=("${XDG_CACHE_HOME:-$HOME/.cache}/em-client-wine-port")
+    WORKDIR_TMPFS_FALLBACK=""
+    for candidate in "${WORKDIR_CANDIDATES[@]}"; do
+        mkdir -p "$candidate" 2>/dev/null || continue
+        [[ -w "$candidate" ]] || continue
+        fs_type=$(stat -f -c %T "$candidate" 2>/dev/null || echo unknown)
+        avail_mb=$(df -Pm "$candidate" 2>/dev/null | awk 'NR==2 {print $4}')
+        [[ "$avail_mb" =~ ^[0-9]+$ ]] || continue
+        if [[ "$fs_type" == "tmpfs" ]]; then
+            # A RAM-backed /tmp is a last resort even when it looks big enough: filling it
+            # consumes memory, and a near-miss turns into a system-wide stall instead of a clean
+            # ENOSPC. Require double the space and only use it if no disk-backed candidate works.
+            if (( avail_mb >= WORKDIR_REQUIRED_MB * 2 )) && [[ -z "$WORKDIR_TMPFS_FALLBACK" ]]; then
+                WORKDIR_TMPFS_FALLBACK="$candidate"
+            fi
+            continue
+        fi
+        if (( avail_mb < WORKDIR_REQUIRED_MB )); then
+            continue
+        fi
+        WORKDIR_BASE="$candidate"
+        break
+    done
+    [[ -n "$WORKDIR_BASE" ]] || WORKDIR_BASE="$WORKDIR_TMPFS_FALLBACK"
+    [[ -n "$WORKDIR_BASE" ]] || die "no workdir location with ~$((WORKDIR_REQUIRED_MB / 1024)) GB free found (checked \${TMPDIR:-/tmp} and \$HOME/.cache) -- free some space or set EMCLIENT_DEPLOY_WORKDIR to a directory with enough room."
+fi
+
+WORKDIR="$(mktemp -d "$WORKDIR_BASE/emclient11-deploy-XXXXXX")"
+log "workdir: $WORKDIR (needs ~$((WORKDIR_REQUIRED_MB / 1024)) GB free; override with EMCLIENT_DEPLOY_WORKDIR)"
 CLEANUP_ON_EXIT=1
+
+# Remove one intermediate stage output once the next stage has consumed it. Only ever matches
+# this run's own output-* directories -- never $WORKDIR/original, and never a directory that is
+# still the pipeline's current input (callers only prune after producing the next directory).
+prune_stage_output() {
+    local dir="$1"
+    [[ -n "$dir" && "$dir" == "$WORKDIR"/output-* ]] || return 0
+    # These two are kept until the verification block at the end (Stage 2's resource/size checks
+    # still read them) even after later stages have moved past them.
+    [[ "$dir" == "${STAGE1_DIR:-}" || "$dir" == "${STAGE2_DIR:-}" ]] && return 0
+    rm -rf "$dir"
+    return 0
+}
 
 cleanup() {
     local status=$?
     if [[ $status -ne 0 || $CLEANUP_ON_EXIT -eq 0 ]]; then
         warn "leaving workdir for inspection: $WORKDIR"
+        warn "  (remove it with: rm -rf '$WORKDIR')"
     else
         rm -rf "$WORKDIR"
     fi
@@ -940,18 +1006,31 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[3] )); then
     log "Stage 3: notification toast empty-until-fade fix (same bug/fix as the 10.4.5674 pipeline's Stages 8-14)..."
     $ILP --patch-notification-click-resubscribe "$STAGE2_DIR" "$WORKDIR/output-stage3a"
     $ILP --patch-notification-content-padding "$WORKDIR/output-stage3a" "$WORKDIR/output-stage3b"
+    prune_stage_output "$WORKDIR/output-stage3a"
     $ILP --patch-notification-avatar-title-gap "$WORKDIR/output-stage3b" "$WORKDIR/output-stage3c"
+    prune_stage_output "$WORKDIR/output-stage3b"
     $ILP --patch-notification-title-singleline "$WORKDIR/output-stage3c" "$WORKDIR/output-stage3d"
+    prune_stage_output "$WORKDIR/output-stage3c"
     $ILP --patch-notification-title-vcenter-fix "$WORKDIR/output-stage3d" "$WORKDIR/output-stage3e"
+    prune_stage_output "$WORKDIR/output-stage3d"
     $ILP --patch-notification-text-in-bitmap "$WORKDIR/output-stage3e" "$WORKDIR/output-stage3f"
+    prune_stage_output "$WORKDIR/output-stage3e"
     $ILP --patch-notification-refresh-on-content-change "$WORKDIR/output-stage3f" "$WORKDIR/output-stage3g"
+    prune_stage_output "$WORKDIR/output-stage3f"
     $ILP --patch-notification-periodic-reblit "$WORKDIR/output-stage3g" "$WORKDIR/output-stage3h"
+    prune_stage_output "$WORKDIR/output-stage3g"
     $ILP --patch-notification-suppress-self-text-only "$WORKDIR/output-stage3h" "$WORKDIR/output-stage3i"
+    prune_stage_output "$WORKDIR/output-stage3h"
     $ILP --patch-notification-icon-bitmap "$WORKDIR/output-stage3i" "$WORKDIR/output-stage3j"
+    prune_stage_output "$WORKDIR/output-stage3i"
     $ILP --patch-notification-title-icon-clip "$WORKDIR/output-stage3j" "$WORKDIR/output-stage3k"
+    prune_stage_output "$WORKDIR/output-stage3j"
     $ILP --patch-notification-text-drawstring "$WORKDIR/output-stage3k" "$WORKDIR/output-stage3l"
+    prune_stage_output "$WORKDIR/output-stage3k"
     $ILP --patch-notification-hover-forward "$WORKDIR/output-stage3l" "$WORKDIR/output-stage3m"
+    prune_stage_output "$WORKDIR/output-stage3l"
     $ILP --patch-notification-toolbar-icons "$WORKDIR/output-stage3m" "$WORKDIR/output-final"
+    prune_stage_output "$WORKDIR/output-stage3m"
     STAGE3_DIR="$WORKDIR/output-final"
 elif (( INSTALLED_MASK & STAGE_BIT[3] )); then
     log "Stage 3 already applied -- using the installed files as-is."
@@ -997,6 +1076,7 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[4] )); then
     log "Stage 4: message preview pane periodic-repaint fix..."
     $ILP --patch-preview-pane-periodic-repaint "$STAGE3_DIR" "$WORKDIR/output-stage4"
     STAGE4_DIR="$WORKDIR/output-stage4"
+    prune_stage_output "$STAGE3_DIR"
 elif (( INSTALLED_MASK & STAGE_BIT[4] )); then
     log "Stage 4 already applied -- using the installed files as-is."
     STAGE4_DIR="$STAGE3_DIR"
@@ -1032,7 +1112,9 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[6] )); then
     log "Stage 6: Exchange sync-freeze fix (same bug/fix as the 10.4.5674 pipeline's Stage 15)..."
     $ILP --patch-account-manager-sync-async "$STAGE4_DIR" "$WORKDIR/output-stage6a"
     $ILP --patch-folder-sync-async "$WORKDIR/output-stage6a" "$WORKDIR/output-final"
+    prune_stage_output "$WORKDIR/output-stage6a"
     FINAL_DIR="$WORKDIR/output-final"
+    prune_stage_output "$STAGE4_DIR"
 elif (( INSTALLED_MASK & STAGE_BIT[6] )); then
     log "Stage 6 already applied -- using the installed files as-is."
     FINAL_DIR="$STAGE4_DIR"
@@ -1116,6 +1198,8 @@ EOF
 
         $ILP --patch-http-dns-connect-callback "$FINAL_DIR" "$WINE_FULL_DLL" "$WORKDIR/output-stage7a"
         $ILP --patch-token-refresh-retry "$WORKDIR/output-stage7a" "$WINE_FULL_DLL" "$WORKDIR/output-stage7-final"
+        prune_stage_output "$WORKDIR/output-stage7a"
+        prune_stage_output "$FINAL_DIR"
         FINAL_DIR="$WORKDIR/output-stage7-final"
         MAILCLIENT_WINE_DLL_OVERRIDE="$WINE_FULL_DLL"
     fi
@@ -1161,6 +1245,8 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[8] )); then
     log "Stage 8: floating-popup Z-order fixes (nested dropdowns, spawned dialogs)..."
     $ILP --patch-nested-popup-owned-by-ancestor "$FINAL_DIR" "$WORKDIR/output-stage8a"
     $ILP --patch-colordialog-suppress-autoclose "$WORKDIR/output-stage8a" "$WORKDIR/output-stage8-final"
+    prune_stage_output "$WORKDIR/output-stage8a"
+    prune_stage_output "$FINAL_DIR"
     FINAL_DIR="$WORKDIR/output-stage8-final"
 elif (( INSTALLED_MASK & STAGE_BIT[8] )); then
     log "Stage 8 already applied -- using the installed files as-is."

@@ -75,6 +75,45 @@ The verification block itself is unchanged from the beta script: `ilspycmd` deco
 each fix's marker members/strings, `--dump-handlers` on every method whose exception-handler table
 was touched, the Stage 2 byte-size/`c2a0c2a0` resource check, and a deps.json entry check.
 
+## Disk-space bug found while testing the port (fixed in the stable script)
+
+The first real run against a full-size bottle died partway through the notification chain with:
+
+```
+Unhandled exception. System.IO.IOException: Disk quota exceeded
+   at System.IO.FileSystem.CopyFile(...)
+   at Program...RunPatchNotificationPeriodicReblit
+```
+
+Two separate problems compounded:
+
+1. **Every intermediate stage directory was retained until the end.** The 14-step notification
+   chain writes `output-stage3a` … `output-stage3m` and `output-final`, and the old script kept
+   all of them alongside Stage 1/2 and the pristine copy. At ~543 MB per DLL-only stage output
+   (full x86 install), that is roughly **8-9 GB** of live files, not the "two directories at a
+   time" the script's comments implied.
+2. **The workdir was hardcoded under `/tmp`.** On this machine `/tmp` is a 7.3 GB **tmpfs**
+   (RAM-backed). Filling it does not just produce a clean ENOSPC: it consumes system memory and
+   can make the whole desktop unresponsive/thrash until reboot, which is exactly what the user
+   reported.
+
+The stable script now:
+
+- calls `prune_stage_output` after each stage has consumed the previous output, so only the
+  pristine copy, Stage 1, Stage 2 (both still needed by verification), the current stage output,
+  and the next one exist at once — measured peak for a trimmed 149 MB test bottle was **930 MB**,
+  extrapolating to roughly **3-4 GB** for a full 661 MB install;
+- picks the workdir from `${TMPDIR:-/tmp}` then `$HOME/.cache/em-client-wine-port`, requiring
+  ~5 GB free and **2× that (10 GB) on a tmpfs**, so it falls back to the disk-backed cache
+  directory on normal `/tmp`-is-tmpfs systems;
+- accepts `EMCLIENT_DEPLOY_WORKDIR=/path` as an explicit override;
+- prints the exact `rm -rf` command for a workdir left behind on failure.
+
+A full `--patches 1,2,3,4,5,6` run against a pristine test bottle after these changes reached
+mask 239 with all verification checks passing, and the workdir was created under
+`$HOME/.cache/em-client-wine-port` (never `/tmp`). If an old run left a workdir behind, reclaim it
+with `rm -rf /tmp/emclient11-deploy-*`.
+
 ## The one real port bug: x64 deps.json target
 
 Stage 7 makes `MailClient.Wine.dll` a genuinely loaded dependency and therefore edits

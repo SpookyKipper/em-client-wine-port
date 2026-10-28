@@ -151,6 +151,12 @@ crashes on essentially every keystroke in a compose window; see
 patches above. The ICU fix is a missing OS component, not an eM Client bug, so it lives in
 `install-msix.sh` rather than as one of the patches in the table.
 
+`deploy.sh` builds its stages in a temporary workdir and needs roughly 5 GB free there. It picks
+a directory automatically — `${TMPDIR:-/tmp}` first, then `$HOME/.cache/em-client-wine-port` — and
+deliberately avoids a RAM-backed `/tmp` (filling a tmpfs can freeze the desktop, not just fail the
+patch). Override with `EMCLIENT_DEPLOY_WORKDIR=/path ./releases/11.0.1267/deploy.sh ...` if
+needed.
+
 ## How it's built
 
 ```

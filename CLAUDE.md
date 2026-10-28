@@ -672,7 +672,13 @@ but don't rely on that alone).
     (stage mask 239). Two port changes: `install-msix.sh` now reads the stable update feed and
     pins .NET desktop runtime 10.0.13, and Stage 7's deps.json target key is read from the file
     instead of hardcoded `win-x86` (a real x64 bug in the beta script — the entry landed under
-    `win-x86` while an x64 app resolves `win-x64`). Full verification notes:
+    `win-x86` while an x64 app resolves `win-x64`). Also fixed a real disk-exhaustion bug that
+    surfaced when patching a full-size install: every intermediate stage directory used to be
+    retained (8-9 GB total) under a hardcoded `/tmp`, which is a RAM-backed tmpfs on many Linux
+    systems — filling it froze the desktop until reboot. The stable script now prunes each
+    intermediate output as soon as the next stage consumes it, and picks a workdir with enough
+    free space on a real disk (`$HOME/.cache/em-client-wine-port` when `/tmp` is tmpfs), with
+    `EMCLIENT_DEPLOY_WORKDIR` as an override. Full verification notes:
     `reports/emclient11-1267-stable-port-findings.md`.
 
 **Patches are now a curated grouping, not raw stage numbers** (same correction as the 10.4.5674
