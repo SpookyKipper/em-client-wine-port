@@ -1053,6 +1053,12 @@ if [[ "$WINE_MANAGER" == "crossover" ]]; then
     if [[ -x "$CXMENU" ]]; then
         log "syncing CrossOver's menu for this bottle..."
         "$CXMENU" --sync --bottle "$BOTTLE_NAME" || warn "cxmenu --sync failed -- the app is still installed, but its shortcut may need a manual menu refresh."
+        # A plain --sync only discovers the entry; CrossOver's default install mode is "ignore",
+        # so it never appears in the host menu (confirmed for real: cxmenu.conf showed
+        # Mode=ignore and no .desktop file was generated). --mode install plus --install both
+        # flips the mode and writes the host integration. Non-fatal for the same reason as above.
+        "$CXMENU" --bottle "$BOTTLE_NAME" --mode install --install \
+            || warn "cxmenu --install failed -- the app is still installed, but it may not appear in the host application menu (run it with: $CXMENU --bottle $BOTTLE_NAME --mode install --install)."
     else
         warn "cxmenu not found at $CXMENU -- skipping menu sync. The app is still installed; refresh CrossOver's menu by hand if the shortcut doesn't appear."
     fi

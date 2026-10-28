@@ -678,7 +678,11 @@ but don't rely on that alone).
     systems — filling it froze the desktop until reboot. The stable script now prunes each
     intermediate output as soon as the next stage consumes it, and picks a workdir with enough
     free space on a real disk (`$HOME/.cache/em-client-wine-port` when `/tmp` is tmpfs), with
-    `EMCLIENT_DEPLOY_WORKDIR` as an override. Full verification notes:
+    `EMCLIENT_DEPLOY_WORKDIR` as an override. Also fixed the installer's CrossOver shortcut
+    registration: `cxmenu --sync` alone only discovers the entry and leaves it at CrossOver's
+    default `Mode=ignore`, so no host `.desktop`/menu item was ever created and the app seemed
+    missing after a successful install. `install-msix.sh` now follows the sync with
+    `cxmenu --bottle NAME --mode install --install`. Full verification notes:
     `reports/emclient11-1267-stable-port-findings.md`.
 
 **Patches are now a curated grouping, not raw stage numbers** (same correction as the 10.4.5674

@@ -156,6 +156,22 @@ both test bottles: `win-x86` and `win-x64` deps.json each got the entry under th
 - No change to `il-patches/il-patcher-Program.cs`, the patch grouping (`PATCH_STAGES`), the stage
   bitmask, the version marker, fonts, file associations, or Bottles support.
 
+## Installer shortcut registration (found while helping a user launch it)
+
+`install-msix.sh` ran `cxmenu --sync --bottle NAME`, which discovers the `eM Client.lnk` in the
+bottle but leaves its `cxmenu.conf` entry at CrossOver's default `Mode = "ignore"`. `cxmenu
+--install` skips ignored menus, so no host `.desktop` file or application-menu entry was created —
+the install succeeded, but the app appeared to be missing. Fixed by following the sync with:
+
+```bash
+cxmenu --bottle "$BOTTLE_NAME" --mode install --install
+```
+
+Confirmed on a real CrossOver bottle: this writes the `eM Client` `.desktop` entry, updates
+`cxmenu.conf` to `Mode = "install"`, and creates `~/bin/mailclient`. Also worth knowing:
+CrossOver's GUI only notices a bottle created from the CLI after it is restarted, so an already-open
+CrossOver window does not list it yet.
+
 ## What was not tested here
 
 - A live launch of the patched build under CrossOver. The test bottles above were deliberately

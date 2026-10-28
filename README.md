@@ -151,6 +151,11 @@ crashes on essentially every keystroke in a compose window; see
 patches above. The ICU fix is a missing OS component, not an eM Client bug, so it lives in
 `install-msix.sh` rather than as one of the patches in the table.
 
+After a CrossOver install, launch eM Client from your desktop application menu (search for
+**eM Client**) or run `~/bin/mailclient`. The installer registers the shortcut with `cxmenu`; if
+CrossOver's own window was already open when the bottle was created, restart it once so the new
+bottle appears there too.
+
 `deploy.sh` builds its stages in a temporary workdir and needs roughly 5 GB free there. It picks
 a directory automatically — `${TMPDIR:-/tmp}` first, then `$HOME/.cache/em-client-wine-port` — and
 deliberately avoids a RAM-backed `/tmp` (filling a tmpfs can freeze the desktop, not just fail the
