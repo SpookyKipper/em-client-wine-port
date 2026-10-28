@@ -14,11 +14,12 @@
 # This folder is the STABLE eM Client 11 release line. It is a fork of the beta line
 # (releases/11.0.196-beta/, which also covered 11.0.282) rather than another entry in that
 # script's own version map, because eM Client 11 left beta: this is the line users should run
-# from now on. Every patch was re-verified against eM Client 11.0.1267.0 -- all 24 il-patcher
-# flags apply cleanly with no adaptation, and every touched type/method still decompiles to the
-# same shape -- but the patch content was checked, not assumed. If a future stable build actually
-# needs different patch logic, fork this folder again (see README.md's "Extending this for a new
-# eM Client version").
+# from now on. Every patch was re-verified against eM Client 11.0.1267.0 and 11.0.1389.0 -- all
+# 24 il-patcher flags apply cleanly with no adaptation, and every touched type/method still
+# decompiles to the same shape -- but the patch content was checked, not assumed. Patch 7 (the
+# license-activation crypto fix) predates neither build and uses its own small Cecil patcher
+# against Licensing.Encryption.dll. If a future stable build actually needs different patch
+# logic, fork this folder again (see README.md's "Extending this for a new eM Client version").
 #
 # Usage:
 #   ./deploy.sh                     interactive: lists bottles found, prompts for choice + confirms
@@ -33,9 +34,9 @@
 #                                   default to NOT included; use --patches (below) to include it
 #                                   non-interactively instead.
 #   ./deploy.sh --force             skip the "already patched, nothing to do" short-circuit
-#   ./deploy.sh --max-revision N    cap the MANDATORY patches at patch N (0..6) instead of this
+#   ./deploy.sh --max-revision N    cap the MANDATORY patches at patch N (0..7) instead of this
 #                                   script's own latest mandatory patch (PIPELINE_LATEST_PATCH) --
-#                                   patch 5 is optional and sits below patch 6 in number, so
+#                                   patch 5 is optional and sits below the latest mandatory patch in number, so
 #                                   --max-revision never implies it either way regardless of N.
 #                                   Purely about the mandatory patches -- to include or exclude the
 #                                   optional patch 5, use --patches instead; the two flags are
@@ -119,11 +120,11 @@ set -euo pipefail
 # line's own per-version release number (see il-patches/MailClient.Wine/VersionMarker.cs) --
 # used only for the release/<version>-<N> git tag and log/header messages. This is a SEPARATE
 # axis from PIPELINE_LATEST_PATCH below (which controls how many patches actually get built):
-# 11.0.1267 starts its own release-number count at 1 even though the underlying pipeline is
-# already at patch 6, because it's the first tagged release for this eM Client build, not because
-# fewer stages apply to it. Bump an existing entry's number when you tag a new release against a
-# version that was already supported.
-declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=1 )
+# 11.0.1267 started its own release-number count at 1 even though the underlying pipeline was
+# already at patch 6 then, because it's the first tagged release for that eM Client build, not
+# because fewer stages apply to it; 11.0.1389 similarly starts at 1. Bump an existing entry's
+# number when you tag a new release against a version that was already supported.
+declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=2 ["11.0.1389"]=1 )
 
 # Each internal STAGE tracks as its OWN bit in a single mask, stored directly as the on-bottle
 # MailClient.Wine.dll marker's FileVersion trailing component -- e.g. a bottle with Stages
@@ -136,7 +137,7 @@ declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=1 )
 # Deliberately no migration from the older, pre-bitmask linear-count scheme this same marker
 # field used to hold -- see the header comment's own note. A bottle patched by an older script
 # needs a pristine reset before this version touches it.
-declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 )
+declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 [9]=256 )
 
 # PATCH is the externally-facing unit -- what --patches/--max-revision take, what README.md's
 # patch table documents, what a user thinks of as "patch N". It's a curated, THEMATIC grouping of
@@ -154,6 +155,10 @@ declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 )
 #   6 = stage  8        (floating-popup Z-order fixes: nested combo dropdowns, spawned dialogs --
 #                        same family as the 10.4.5674 sibling's own patch 6; see
 #                        reports/floating-popup-zorder-findings.md)
+#   7 = stage  9        (license activation crypto: v2 ECDSA verification plus the older RSA-OAEP
+#                        formats -- same family as the sibling's own patch 3/Stage 5, but eM Client
+#                        11's v2 format needs a managed ECDsa, not just RSA; see
+#                        reports/emclient11-license-ecdsa-findings.md)
 declare -A PATCH_STAGES=(
     [1]="2"
     [2]="4"
@@ -161,6 +166,7 @@ declare -A PATCH_STAGES=(
     [4]="3"
     [5]="6 7"
     [6]="8"
+    [7]="9"
 )
 # Highest MANDATORY patch number this script builds by default -- shared across every supported
 # eM Client version above. This (not OUR_RELEASE_NUMBER_FOR_VERSION) is what controls how far a
@@ -169,8 +175,8 @@ declare -A PATCH_STAGES=(
 # chain despite its number being lower than this constant. Always consult MANDATORY_PATCHES
 # (below), never assume "1..PIPELINE_LATEST_PATCH" is a contiguous mandatory range -- it isn't,
 # on purpose.
-PIPELINE_LATEST_PATCH=6
-MANDATORY_PATCHES=(1 2 3 4 6)
+PIPELINE_LATEST_PATCH=7
+MANDATORY_PATCHES=(1 2 3 4 6 7)
 
 MANDATORY_MASK=0
 for _p in "${MANDATORY_PATCHES[@]}"; do
@@ -189,6 +195,16 @@ log()  { echo "[deploy] $*"; }
 warn() { echo "[deploy] WARNING: $*" >&2; }
 err()  { echo "[deploy] ERROR: $*" >&2; }
 die()  { err "$*"; exit 1; }
+
+# The RID-qualified target key a deps.json actually resolves against (win-x86 or win-x64, etc.).
+# Used by both stages that add a sibling assembly. Reading it from the file avoids hardcoding
+# win-x86 and silently putting an x64 install's entry under a target the runtime never consults.
+deps_json_target_key() {
+    python3 -c "
+import json, sys
+print(json.load(open(sys.argv[1]))['runtimeTarget']['name'])
+" "$1"
+}
 
 # ---------------------------------------------------------------------------
 # Args
@@ -1254,6 +1270,90 @@ else
     log "Stage 8 skipped -- not targeted this run."
 fi
 
+# ---------------------------------------------------------------------------
+# Stage 9 (patch 7, MANDATORY): license activation crypto under Wine.
+#
+# eM Client 11.0.1267/1389 use the v2 license format: a "v2.<payload>.<signature>" envelope
+# signed with ECDSA P-256/SHA-256. Licensing.Encryption.DecryptAndVerify's constructor imports the
+# server's public key with ECDsa.ImportFromPem, which under Wine always fails inside CNG/bcrypt
+# with "CryptographicException: Unknown error (0x80090029)" (ECCng.ImportKeyBlob); the app's
+# blanket catch turns that into a silent "license invalid". The SAME assembly still carries the
+# older RSA-encrypted formats, whose RSACryptoServiceProvider.Decrypt(..., fOAEP: true) hits the
+# Wine RSA-OAEP defect already fixed for eM Client 10 (reports/license-activation-oaep-findings.md).
+#
+# Both are replaced with pure-managed BouncyCastle implementations from the same helper assembly
+# (OaepPatch + ManagedEcdsa): EcdsaPatch.Create() is substituted for ECDsa.Create(), keeping the
+# app's own ImportFromPem/VerifyData call sequence intact, and the RSA-OAEP calls are retargeted
+# to OaepPatch.OaepSha1Decrypt. See reports/emclient11-license-ecdsa-findings.md for the full
+# investigation and the live-under-Wine proof against a real v2 license token.
+# ---------------------------------------------------------------------------
+
+LICENSE_PATCH_DLL=""
+if (( NEEDS_WORK_MASK & STAGE_BIT[9] )); then
+    log "Stage 9: license activation crypto fix (ECDSA v2 + RSA-OAEP under Wine)..."
+    mkdir -p "$WORKDIR/tools/BouncyCastlePatch"
+    cp "$IL_PATCHES_DIR/MailClient.Licensing.BouncyCastlePatch/OaepPatch.cs" \
+       "$IL_PATCHES_DIR/MailClient.Licensing.BouncyCastlePatch/ManagedEcdsa.cs" \
+       "$WORKDIR/tools/BouncyCastlePatch/"
+    BC_DLL="$WORKDIR/original/BouncyCastle.Cryptography.dll"
+    [[ -f "$BC_DLL" ]] || die "BouncyCastle.Cryptography.dll not found in the target install -- can't build the license-activation fix without it."
+    cat > "$WORKDIR/tools/BouncyCastlePatch/BouncyCastlePatch.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MailClient.Licensing.BouncyCastlePatch</RootNamespace>
+    <AssemblyName>MailClient.Licensing.BouncyCastlePatch</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="BouncyCastle.Cryptography">
+      <HintPath>$BC_DLL</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
+EOF
+    dotnet build -c Release "$WORKDIR/tools/BouncyCastlePatch" >"$WORKDIR/build-bouncycastlepatch.log" 2>&1 \
+        || { cat "$WORKDIR/build-bouncycastlepatch.log" >&2; die "failed to build the license BouncyCastlePatch helper (log above)"; }
+    LICENSE_PATCH_DLL="$WORKDIR/tools/BouncyCastlePatch/bin/Release/net10.0/MailClient.Licensing.BouncyCastlePatch.dll"
+
+    log "building license-encryption-patcher..."
+    mkdir -p "$WORKDIR/tools/license-encryption-patcher"
+    cp "$IL_PATCHES_DIR/license-encryption-patcher-Program.cs" "$WORKDIR/tools/license-encryption-patcher/Program.cs"
+    cat > "$WORKDIR/tools/license-encryption-patcher/license-encryption-patcher.csproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>license_encryption_patcher</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+  </ItemGroup>
+</Project>
+EOF
+    dotnet build -c Release "$WORKDIR/tools/license-encryption-patcher" >"$WORKDIR/build-license-encryption-patcher.log" 2>&1 \
+        || { cat "$WORKDIR/build-license-encryption-patcher.log" >&2; die "failed to build license-encryption-patcher (log above)"; }
+    ILP3="dotnet $WORKDIR/tools/license-encryption-patcher/bin/Release/net10.0/license-encryption-patcher.dll"
+
+    mkdir -p "$WORKDIR/output-stage9"
+    $ILP3 "$FINAL_DIR/Licensing.Encryption.dll" "$LICENSE_PATCH_DLL" "$WORKDIR/output-stage9/Licensing.Encryption.dll"
+    # -n/--no-clobber: fill in the rest of the tree without overwriting the DLL just patched.
+    cp -an "$FINAL_DIR"/. "$WORKDIR/output-stage9/"
+    cp "$LICENSE_PATCH_DLL" "$WORKDIR/output-stage9/"
+    prune_stage_output "$FINAL_DIR"
+    FINAL_DIR="$WORKDIR/output-stage9"
+elif (( INSTALLED_MASK & STAGE_BIT[9] )); then
+    log "Stage 9 (license activation crypto) already applied -- carrying the existing helper forward."
+    LICENSE_PATCH_DLL="$WORKDIR/original/MailClient.Licensing.BouncyCastlePatch.dll"
+else
+    log "Stage 9 skipped -- not targeted this run."
+fi
+
 # Both Cecil patch invocations (any stage, not just Stage 7) only ever copy *.dll files forward --
 # non-dll files like MailClient.deps.json never make it into a stage's own output directory.
 # Backfill everything ELSE from $WORKDIR/original (the one directory guaranteed to hold a
@@ -1282,14 +1382,24 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[7] )); then
     # entry under the x86 key there would pass every decompile check while still failing at
     # runtime (the runtime only consults its own RID-qualified target). Same class of bug as the
     # wrong-version-key one documented above, just along a different axis.
-    DEPS_TARGET_KEY=$(python3 -c "
-import json, sys
-print(json.load(open(sys.argv[1]))['runtimeTarget']['name'])
-" "$FINAL_DIR/MailClient.deps.json") || die "couldn't read runtimeTarget.name from MailClient.deps.json"
+    DEPS_TARGET_KEY=$(deps_json_target_key "$FINAL_DIR/MailClient.deps.json") || die "couldn't read runtimeTarget.name from MailClient.deps.json"
     [[ -n "$DEPS_TARGET_KEY" ]] || die "MailClient.deps.json has an empty runtimeTarget.name"
     python3 "$IL_PATCHES_DIR/license-oaep-patcher-patch-deps-json.py" \
         "$FINAL_DIR/MailClient.deps.json" "MailClient.Wine" "$RELEASE_VERSION.0" "$DEPS_TARGET_KEY" \
         || die "failed to patch MailClient.deps.json for MailClient.Wine (Stage 7, target $DEPS_TARGET_KEY)"
+fi
+
+if (( NEEDS_WORK_MASK & STAGE_BIT[9] )); then
+    # Licensing.Encryption.dll now references the BouncyCastle helper assembly, which the
+    # deps.json-managed runtime only resolves if listed explicitly. Its AssemblyVersion is the
+    # csproj default 1.0.0.0, so the deps key is /1.0.0 (same value/proven shape as the 10.4.5674
+    # pipeline's own BouncyCastlePatch entry).
+    command -v python3 >/dev/null 2>&1 || die "python3 is required for Stage 9 (patching MailClient.deps.json) but wasn't found"
+    DEPS_TARGET_KEY=$(deps_json_target_key "$FINAL_DIR/MailClient.deps.json") || die "couldn't read runtimeTarget.name from MailClient.deps.json"
+    [[ -n "$DEPS_TARGET_KEY" ]] || die "MailClient.deps.json has an empty runtimeTarget.name"
+    python3 "$IL_PATCHES_DIR/license-oaep-patcher-patch-deps-json.py" \
+        "$FINAL_DIR/MailClient.deps.json" "MailClient.Licensing.BouncyCastlePatch" "1.0.0" "$DEPS_TARGET_KEY" \
+        || die "failed to patch MailClient.deps.json for MailClient.Licensing.BouncyCastlePatch (Stage 9, target $DEPS_TARGET_KEY)"
 fi
 
 # The version marker (or Stage 7's real functional build of the same filename, when included) is
@@ -1458,6 +1568,31 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[8] )); then
         || die "verification failed: --dump-handlers reported a handler-ordering violation in CommonUIUtils.ShowColorDialog"
 fi
 
+# Stage 9 verification -- only meaningful (and only ran) when Stage 9 actually ran this time.
+if (( NEEDS_WORK_MASK & STAGE_BIT[9] )); then
+    license_out=$($ILSPY -t "Licensing.Encryption.DecryptAndVerify" "$FINAL_DIR/Licensing.Encryption.dll")
+    echo "$license_out" | grep -q "EcdsaPatch.Create" \
+        || die "verification failed: DecryptAndVerify's constructor doesn't call EcdsaPatch.Create -- v2 ECDSA fix missing"
+    oaep_call_count=$(echo "$license_out" | grep -c "OaepPatch.OaepSha1Decrypt" || true)
+    [[ "$oaep_call_count" -ge 2 ]] \
+        || die "verification failed: expected >=2 OaepPatch.OaepSha1Decrypt call sites in DecryptAndVerify, found $oaep_call_count"
+
+    [[ -f "$FINAL_DIR/MailClient.Licensing.BouncyCastlePatch.dll" ]] \
+        || die "verification failed: MailClient.Licensing.BouncyCastlePatch.dll missing from the staged output"
+
+    $ILP --dump-handlers "$FINAL_DIR/Licensing.Encryption.dll" Licensing.Encryption.DecryptAndVerify DecryptAndVerifyStringV1 2>&1 | tail -1 | grep -q "^OK:" \
+        || die "verification failed: --dump-handlers reported a handler-ordering violation in DecryptAndVerifyStringV1"
+    $ILP --dump-handlers "$FINAL_DIR/Licensing.Encryption.dll" Licensing.Encryption.DecryptAndVerify DecryptStringV0 2>&1 | tail -1 | grep -q "^OK:" \
+        || die "verification failed: --dump-handlers reported a handler-ordering violation in DecryptStringV0"
+
+    python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if sys.argv[2] in d['targets'].get(sys.argv[3], {}) else 1)
+" "$FINAL_DIR/MailClient.deps.json" "MailClient.Licensing.BouncyCastlePatch/1.0.0" "$DEPS_TARGET_KEY" \
+        || die "verification failed: MailClient.deps.json has no MailClient.Licensing.BouncyCastlePatch/1.0.0 entry under $DEPS_TARGET_KEY -- the license fix won't load at runtime"
+fi
+
 log "all verification checks passed."
 
 # ---------------------------------------------------------------------------
@@ -1468,7 +1603,8 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUPS_DIR/${BOTTLE_NAME}-${TIMESTAMP}"
 mkdir -p "$BACKUP_DIR"
 
-DEPLOY_FILES=(MailClient.dll MailClient.Abstractions.dll MailClient.Common.UI.dll MailClient.Accounts.dll MailClient.Wine.dll MailClient.deps.json)
+DEPLOY_FILES=(MailClient.dll MailClient.Abstractions.dll MailClient.Common.UI.dll MailClient.Accounts.dll MailClient.Wine.dll Licensing.Encryption.dll MailClient.deps.json)
+[[ -f "$FINAL_DIR/MailClient.Licensing.BouncyCastlePatch.dll" ]] && DEPLOY_FILES+=(MailClient.Licensing.BouncyCastlePatch.dll)
 
 log "backing up current files to $BACKUP_DIR ..."
 for f in "${DEPLOY_FILES[@]}"; do

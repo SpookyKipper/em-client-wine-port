@@ -199,18 +199,34 @@ license state, kept available for licensing-related testing).
 ## eM Client 11 — separate release line
 
 **The current, supported eM Client 11 line is `releases/11.0.1267/` (stable).** eM Client 11 left
-beta in early October 2026; `11.0.1267.0` is the first stable build this project targets. The
-older `releases/11.0.196-beta/` folder and `original/em-11.0.196*`/`em-11.0.282*` snapshots are
-kept as a frozen historical reference (that script also still covers 11.0.282), but new installs
-should use the stable folder. Its `install-msix.sh` reads the stable update feed (no `?beta=true`)
-and pins the .NET 10.0.13 desktop runtime that matches this build. Every patch from the beta line
-was re-run against `11.0.1267.0` x86 and x64 before adding it: all 24 il-patcher flags apply
-unmodified, every verification/decompile/handler check passes, and a real end-to-end `deploy.sh`
-run reached stage mask 239 on both architectures. One port-specific bug was found and fixed:
-Stage 7's deps.json target key was hardcoded to `win-x86`, so on an x64 install the
-`MailClient.Wine` entry landed under a target the runtime never consults — now read from
-`MailClient.deps.json`'s own `runtimeTarget.name`. Full account:
-`reports/emclient11-1267-stable-port-findings.md`.
+beta in early October 2026; `11.0.1267.0` was the first stable build this project targeted, and
+`11.0.1389.0` is the current stable build. The folder name is historical — the script supports
+**both** builds (`OUR_RELEASE_NUMBER_FOR_VERSION` has entries for `11.0.1267` and `11.0.1389`),
+as it did for the beta line's 11.0.196/11.0.282 pair. The older `releases/11.0.196-beta/` folder
+and `original/em-11.0.196*`/`em-11.0.282*` snapshots are kept as a frozen historical reference
+(that script also still covers 11.0.282), but new installs should use the stable folder. Its
+`install-msix.sh` reads the stable update feed (no `?beta=true`, currently resolving 11.0.1389)
+and pins the .NET 10.0.14 desktop runtime matching that build.
+
+Every patch from the beta line was re-run against `11.0.1267.0` and `11.0.1389.0` on x86 and x64
+before adding it: all 24 il-patcher flags apply unmodified, every verification/decompile/handler
+check passes, and full end-to-end `deploy.sh` runs reached stage mask 239 on both architectures
+(and 495 after the license patch below). Fixes found along the way:
+
+- **x64 deps.json target** — Stage 7's target key was hardcoded to `win-x86`, so on an x64
+  install the `MailClient.Wine` entry landed under a target the runtime never consults; now read
+  from `MailClient.deps.json`'s own `runtimeTarget.name`.
+- **License activation (patch 7 / Stage 9)** — eM Client 11's v2 licenses are ECDSA P-256 signed,
+  and Wine's CNG/bcrypt cannot import the server's public key (`CryptographicException
+  0x80090029` from `ECCng.ImportKeyBlob`), so activation silently failed before verification
+  even started. The constructor's `ECDsa.Create()` is now redirected to a pure-managed
+  BouncyCastle `ECDsa` implementation; the assembly's legacy RSA-OAEP paths get the same
+  BouncyCastle treatment as eM Client 10. Verified against the user's real stored v2 token under
+  Wine (managed `VerifyData` = true, `TryVerifyAndDecode` = `EcdsaSigned`), and via full pipeline
+  runs on 1267/1389. Full root cause:
+  `reports/emclient11-license-ecdsa-findings.md`.
+
+Full port account: `reports/emclient11-1267-stable-port-findings.md`.
 
 Everything below (and everything above `original/em-10.4.5674/`, `releases/10.4.5674/`, the
 "Status" section) describes the beta line's own history. The same separation rules still apply to
@@ -218,16 +234,16 @@ the stable line: never fold eM Client 11 fixes into `releases/10.4.5674/deploy.s
 one version's `deploy.sh` against another's bottle (each script's version gate warns and asks
 before proceeding against an unexpected `FileVersion`, but don't rely on that alone).
 
-- **`original/em-11.0.1267/`** and **`original/em-11.0.1267-x64/`** — pristine reference snapshots
-  for the stable build (`MailClient.dll` FileVersion `11.0.1267.0`, InformationalVersion
-  `11.0.1267+ca9fa42242`), extracted from the same `.msixbundle` (x86: 2549 files, x64: 2552).
-  The x86/x64 patch content is identical; only the deps.json runtime target differs (see the
-  Stage 7 port note above).
+- **`original/em-11.0.1267/`** + **`-x64/`** and **`original/em-11.0.1389/`** + **`-x64/`** —
+  pristine reference snapshots for the two supported stable builds (`11.0.1267`, 2549/2552 files;
+  `11.0.1389`, 2549/2552 files), extracted from their own `.msixbundle`s. The x86/x64 patch
+  content is identical; only the deps.json runtime target differs (see the Stage 7 note above).
 - **`releases/11.0.1267/`** — the stable deploy/install pair, forked from the beta line. Its
-  `OUR_RELEASE_NUMBER_FOR_VERSION` contains only `11.0.1267`; the beta builds are deliberately not
-  accepted by this folder's version gate (use `releases/11.0.196-beta/` for those). Fonts,
-  file-type associations, Bottles support, the version marker, the patch grouping (1–4 and 6
-  mandatory, 5 optional), and every CLI flag are identical to the beta script.
+  `OUR_RELEASE_NUMBER_FOR_VERSION` accepts `11.0.1267` and `11.0.1389`; beta builds are
+  deliberately not accepted by this folder's version gate (use `releases/11.0.196-beta/` for
+  those). Fonts, file-type associations, Bottles support, the version marker, the patch grouping
+  (1–4, 6, 7 mandatory, 5 optional), and every CLI flag are identical to the beta script apart
+  from the added license stage.
 
 ### Beta line (historical)
 
@@ -670,7 +686,7 @@ but don't rely on that alone).
     x86 and x64 snapshots; every one applied unmodified, and both a fresh `deploy.sh --patches
     1,2,3,4,5,6` run and an idempotent re-run completed with all verification checks passing
     (stage mask 239). Two port changes: `install-msix.sh` now reads the stable update feed and
-    pins .NET desktop runtime 10.0.13, and Stage 7's deps.json target key is read from the file
+    pins .NET desktop runtime 10.0.13 at the time (10.0.14 since 1389), and Stage 7's deps.json target key is read from the file
     instead of hardcoded `win-x86` (a real x64 bug in the beta script — the entry landed under
     `win-x86` while an x64 app resolves `win-x64`). Also fixed a real disk-exhaustion bug that
     surfaced when patching a full-size install: every intermediate stage directory used to be
@@ -684,6 +700,22 @@ but don't rely on that alone).
     missing after a successful install. `install-msix.sh` now follows the sync with
     `cxmenu --bottle NAME --mode install --install`. Full verification notes:
     `reports/emclient11-1267-stable-port-findings.md`.
+  - `release/11.0.1267-2` / `release/11.0.1389-1` — **license activation fix (new patch 7 /
+    Stage 9)** and support for eM Client `11.0.1389.0` (the current stable build; a 1267 install
+    auto-updated to it). Root cause: Wine's CNG/bcrypt cannot import the license server's ECDSA
+    P-256 public key (`CryptographicException 0x80090029` from `ECCng.ImportKeyBlob`), so
+    `Licensing.Encryption.DecryptAndVerify`'s constructor never gets a verification key and the
+    v2 (`v2.<payload>.<sig>`) license check silently fails. A new helper,
+    `MailClient.Licensing.BouncyCastlePatch.ManagedEcdsa`, implements the `ECDsa` surface in pure
+    managed BouncyCastle code; `license-encryption-patcher-Program.cs` redirects the constructor's
+    `ECDsa.Create()` to it, and also redirects the assembly's legacy
+    `RSACryptoServiceProvider.Decrypt(..., fOAEP: true)` calls to the existing
+    `OaepPatch.OaepSha1Decrypt`. Verified against the user's real stored license token under Wine
+    (the patched assembly returns `TryVerifyAndDecode = true`, `EcdsaSigned`, 1487-byte payload;
+    the unpatched one throws 0x80090029). Full pipeline runs on pristine 1267 and 1389 x86 both
+    reached stage mask **495** with all checks passing. `install-msix.sh` .NET runtime pin moved to
+    10.0.14 to match 1389's runtimeconfig. Full report:
+    `reports/emclient11-license-ecdsa-findings.md`.
 
 **Patches are now a curated grouping, not raw stage numbers** (same correction as the 10.4.5674
 sibling script — see its own note under its `## Status` section for the full rationale):
@@ -695,6 +727,8 @@ map, completely separate from `STAGE_BIT`:
 3 = stage 1      (PBKDF2 startup crash, encryption)
 4 = stage 3      (notification toast)
 5 = stages 6, 7  (both sync-freeze fixes, grouped together, OPTIONAL)
+6 = stage 8      (floating-popup Z-order fixes)
+7 = stage 9      (license activation crypto: ECDSA v2 + RSA-OAEP)
 ```
 Deliberately NOT the same numbering as the 10.4.5674 script's own patches, though the themes
 parallel where they can (both scripts' patch 1 is an icon/font fix; both have an

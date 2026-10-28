@@ -106,8 +106,8 @@
 set -euo pipefail
 
 APPINSTALLER_URL="https://licensing.emclient.com/api/update/emclient.appinstaller"
-DOTNET_X64_URL="https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.13/windowsdesktop-runtime-10.0.13-win-x64.exe"
-DOTNET_X86_URL="https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.13/windowsdesktop-runtime-10.0.13-win-x86.exe"
+DOTNET_X64_URL="https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.14/windowsdesktop-runtime-10.0.14-win-x64.exe"
+DOTNET_X86_URL="https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.14/windowsdesktop-runtime-10.0.14-win-x86.exe"
 # A fork of the official unicode-org/icu, built with unversioned (Microsoft-compatible) symbol
 # names -- see the ICU installation section below for why this is needed and how it was verified.
 ICU_URL="https://github.com/FaithLife-Community/icu/releases/download/72.1-custom%2B4/icu-win.tar.gz"
@@ -533,9 +533,9 @@ log "target bottle: $BOTTLE_NAME ($BOTTLE_DIR)"
 # ---------------------------------------------------------------------------
 
 log "downloading .NET 10 desktop runtime (x64)..."
-curl -fL --progress-bar -o "$TMPDIR/windowsdesktop-runtime-10.0.13-win-x64.exe" "$DOTNET_X64_URL"
+curl -fL --progress-bar -o "$TMPDIR/windowsdesktop-runtime-10.0.14-win-x64.exe" "$DOTNET_X64_URL"
 log "downloading .NET 10 desktop runtime (x86)..."
-curl -fL --progress-bar -o "$TMPDIR/windowsdesktop-runtime-10.0.13-win-x86.exe" "$DOTNET_X86_URL"
+curl -fL --progress-bar -o "$TMPDIR/windowsdesktop-runtime-10.0.14-win-x86.exe" "$DOTNET_X86_URL"
 
 # ---------------------------------------------------------------------------
 # Install both runtimes into the bottle, silently. These are Microsoft's standard Burn-based
@@ -557,8 +557,8 @@ install_runtime() {
     wine_run "$BOTTLE_NAME" "$win_path" /install /quiet /norestart \
         || die "failed to install $(basename "$exe") -- see any Wine output above"
 }
-install_runtime "$TMPDIR/windowsdesktop-runtime-10.0.13-win-x64.exe"
-install_runtime "$TMPDIR/windowsdesktop-runtime-10.0.13-win-x86.exe"
+install_runtime "$TMPDIR/windowsdesktop-runtime-10.0.14-win-x64.exe"
+install_runtime "$TMPDIR/windowsdesktop-runtime-10.0.14-win-x86.exe"
 log ".NET 10 desktop runtimes installed."
 
 # ---------------------------------------------------------------------------

@@ -88,13 +88,15 @@ above: its own bottle, its own `releases/11.0.1267/` folder, its own findings re
 `CLAUDE.md`'s "eM Client 11 — separate release line" section for the full breakdown of what's
 shared (the patcher tool) versus kept separate (everything else).
 
-`releases/11.0.1267/` is the stable release line. All six patches were re-verified against
-`11.0.1267.0` on both x86 and x64: every `il-patcher` flag applies unmodified, every verification
-and handler check passes, and the only code change needed for the port was making Stage 7's
-`MailClient.deps.json` target key architecture-aware (it was hardcoded to `win-x86`, which left
-x64 installs with the helper entry under the wrong runtime target — see
-[emclient11-1267-stable-port-findings.md](reports/emclient11-1267-stable-port-findings.md)).
-The older beta line (`releases/11.0.196-beta/`, covering 11.0.196 and 11.0.282) is kept as a frozen
+`releases/11.0.1267/` is the stable release line, verified against both `11.0.1267.0` and
+`11.0.1389.0` (the current stable build) on x86 and x64. Every patch applies unmodified and every
+verification and handler check passes. Two fixes were needed after the initial port: Stage 7's
+`MailClient.deps.json` target key is read from the file instead of hardcoded to `win-x86` (x64
+installs otherwise got the helper entry under the wrong runtime target), and **patch 7** replaces
+eM Client 11's native license crypto with BouncyCastle so activation works under Wine. See
+[emclient11-1267-stable-port-findings.md](reports/emclient11-1267-stable-port-findings.md) and
+[emclient11-license-ecdsa-findings.md](reports/emclient11-license-ecdsa-findings.md). The older
+beta line (`releases/11.0.196-beta/`, covering 11.0.196 and 11.0.282) is kept as a frozen
 historical reference; use `releases/11.0.1267/` for current installs.
 
 ### `releases/11.0.1267/install-msix.sh` flags
@@ -120,10 +122,10 @@ eM Client 11 ships as an MSIX package, which CrossOver/Wine can't install direct
 Identical flag set to the 10.4.5674 script above, file-associations flags included — `--bottle`,
 `--list`, `-y`/`--yes`, `--force`, `--max-revision N`, `--patches LIST`, `--install-fonts`,
 `--no-fonts`, `--install-associations`, `--no-associations`, `--force-associations`,
-`--wine-manager crossover|bottles`, `-h`/`--help` all work identically, same 6-patch shape as the
-10.4.5674 script (patches 1–4 and 6 mandatory, patch 5 optional) — though which bugs land in
-which patch number is its own, independently-curated grouping (see the table below), not the
-same numbering as the 10.4.5674 script's own patches.
+`--wine-manager crossover|bottles`, `-h`/`--help` all work identically — though which bugs land
+in which patch number is its own, independently-curated grouping (see the table below), not the
+same numbering as the 10.4.5674 script's own patches. Patches 1–4, 6, and 7 are mandatory; patch 5
+is optional.
 
 | Patch # | Bug | Root cause | Report |
 |---|---|---|---|
@@ -135,6 +137,7 @@ same numbering as the 10.4.5674 script's own patches.
 | **5 (optional)** | Freezes syncing Microsoft 365 / Graph API accounts specifically (a different bug from the classic IMAP/EWS freeze above) | Same underlying Wine DNS defect, hit through `HttpClient`'s own connection path instead, plus a second hang in socket send/receive | [emclient11-msgraph-sync-freeze-findings.md](reports/emclient11-msgraph-sync-freeze-findings.md) |
 | 6 | Font-family dropdown (and other nested combo dropdowns) rendered underneath its own parent popup | Wine never establishes a real native window-owner relationship the app's popup code asks for; fixed by asserting it explicitly instead | [floating-popup-zorder-findings.md](reports/floating-popup-zorder-findings.md) |
 | 6 | Opening the standard color picker from inside a floating popup closed the popup instead of leaving it open behind the dialog | A global WinForms filter auto-closes any popup it doesn't recognize as owning the newly-active window — same root cause as the dropdown bug above | [floating-popup-zorder-findings.md](reports/floating-popup-zorder-findings.md) |
+| 7 | License activation silently failed — spinner, then nothing; the license never activated | Wine's CNG/bcrypt cannot import the license server's ECDSA P-256 key (`0x80090029`), so eM Client's v2 license signature check fails; older RSA-OAEP formats hit the same Wine defect fixed for eM Client 10. Both are replaced with pure-managed BouncyCastle crypto | [emclient11-license-ecdsa-findings.md](reports/emclient11-license-ecdsa-findings.md) |
 
 Patch 5 bundles both sync-freeze fixes together — they're decided and applied as one unit
 (`--patches 5` includes both; there's no way to request just one).
