@@ -716,6 +716,22 @@ but don't rely on that alone).
     reached stage mask **495** with all checks passing. `install-msix.sh` .NET runtime pin moved to
     10.0.14 to match 1389's runtimeconfig. Full report:
     `reports/emclient11-license-ecdsa-findings.md`.
+  - `release/11.0.1389-2` — **Matrix chat sync fix (new patch 8 / Stage 10)**, prompted by a live
+    Beeper account that authenticated (avatar/`whoami`/Element session visible) but showed a red
+    warning and no chats. Root cause was not Wine: Beeper's `/sync` omits optional
+    `account_data` (30/149 rooms), `summary` (29/149), and `ephemeral` (6/149) sections, while
+    `MailClient.Protocols.Matrix.RoomInfo`/`MatrixEvents` mark them `required`; the
+    source-generated `System.Text.Json` metadata then rejected the whole response
+    (`JsonException: ... missing required properties including: 'account_data', 'summary'`), so
+    initial sync never completed and `SyncToken` stayed null. Fixed with
+    `MailClient.Wine.MatrixJsonDefaults.EnsureSyncRequiredFields<T>` called from
+    `MatrixClient.Deserialize<T>`, which fills missing sections with their spec-defined empty
+    shape only for `SyncResponse`. Stage 10 rebuilds `MailClient.Wine` (so the method is present
+    even on an already-stage-7 install), deploys `MailClient.Protocols.Matrix.dll`, and reasserts
+    its deps entry. Verified by feeding the account's real `/sync` response to the patched
+    `MatrixClient` under Wine: `Join=149`; the unpatched assembly throws. Full run on pristine
+    1389 x86 reached mask **1007** with all checks passing, and the fix was deployed live. Full
+    report: `reports/emclient11-matrix-beeper-sync-findings.md`.
 
 **Patches are now a curated grouping, not raw stage numbers** (same correction as the 10.4.5674
 sibling script — see its own note under its `## Status` section for the full rationale):
@@ -729,6 +745,7 @@ map, completely separate from `STAGE_BIT`:
 5 = stages 6, 7  (both sync-freeze fixes, grouped together, OPTIONAL)
 6 = stage 8      (floating-popup Z-order fixes)
 7 = stage 9      (license activation crypto: ECDSA v2 + RSA-OAEP)
+8 = stage 10     (Matrix /sync JSON compatibility: fill optional room sections)
 ```
 Deliberately NOT the same numbering as the 10.4.5674 script's own patches, though the themes
 parallel where they can (both scripts' patch 1 is an icon/font fix; both have an

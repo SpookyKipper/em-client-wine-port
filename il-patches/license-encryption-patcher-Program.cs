@@ -54,24 +54,31 @@ TypeDefinition decryptAndVerify = module.GetType("Licensing.Encryption.DecryptAn
 // --- 1. ECDsa.Create() -> EcdsaPatch.Create() -------------------------------------------------
 
 int ecdsaPatched = 0;
+int ecdsaAlreadyPatched = 0;
 foreach (MethodDefinition ctor in decryptAndVerify.Methods.Where(m => m.IsConstructor))
 {
     foreach (Instruction instr in ctor.Body.Instructions)
     {
-        if (instr.OpCode == OpCodes.Call &&
-            instr.Operand is MethodReference mr &&
-            mr.Name == "Create" &&
-            mr.DeclaringType.FullName == "System.Security.Cryptography.ECDsa")
+        if (instr.OpCode != OpCodes.Call || instr.Operand is not MethodReference mr || mr.Name != "Create") continue;
+        if (mr.DeclaringType.FullName == "System.Security.Cryptography.ECDsa")
         {
             instr.Operand = importedCreate;
             ecdsaPatched++;
         }
+        else if (mr.DeclaringType.FullName == "MailClient.Licensing.BouncyCastlePatch.EcdsaPatch")
+        {
+            ecdsaAlreadyPatched++;
+        }
     }
 }
 
-if (ecdsaPatched != 1)
+if (ecdsaPatched == 0 && ecdsaAlreadyPatched == 1)
 {
-    throw new Exception($"expected exactly 1 ECDsa::Create() call in DecryptAndVerify's constructors, found {ecdsaPatched}");
+    Console.WriteLine("ECDsa::Create already redirected to EcdsaPatch::Create -- skipping");
+}
+else if (ecdsaPatched != 1)
+{
+    throw new Exception($"expected exactly 1 ECDsa::Create() call in DecryptAndVerify's constructors, found {ecdsaPatched} (already patched: {ecdsaAlreadyPatched})");
 }
 
 // --- 2. RSA-OAEP calls ------------------------------------------------------------------------
@@ -126,9 +133,22 @@ foreach (MethodDefinition method in decryptAndVerify.Methods)
     }
 }
 
-if (rsaPatched < 1)
+if (rsaPatched == 0)
 {
-    throw new Exception("expected at least 1 RSACryptoServiceProvider::Decrypt(byte[], bool) call, found 0");
+    int oaepAlready = decryptAndVerify.Methods
+        .Where(m => m.HasBody)
+        .SelectMany(m => m.Body.Instructions)
+        .Count(i => i.OpCode == OpCodes.Call && i.Operand is MethodReference mr &&
+                    mr.DeclaringType.FullName == "MailClient.Licensing.BouncyCastlePatch.OaepPatch" &&
+                    mr.Name == "OaepSha1Decrypt");
+    if (oaepAlready >= 1)
+    {
+        Console.WriteLine($"RSA-OAEP calls already redirected to OaepPatch ({oaepAlready} site(s)) -- skipping");
+    }
+    else
+    {
+        throw new Exception("expected at least 1 RSACryptoServiceProvider::Decrypt(byte[], bool) call, found 0");
+    }
 }
 
 string? outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath));

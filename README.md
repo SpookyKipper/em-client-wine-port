@@ -90,12 +90,15 @@ shared (the patcher tool) versus kept separate (everything else).
 
 `releases/11.0.1267/` is the stable release line, verified against both `11.0.1267.0` and
 `11.0.1389.0` (the current stable build) on x86 and x64. Every patch applies unmodified and every
-verification and handler check passes. Two fixes were needed after the initial port: Stage 7's
+verification and handler check passes. Three fixes followed the initial port: Stage 7's
 `MailClient.deps.json` target key is read from the file instead of hardcoded to `win-x86` (x64
-installs otherwise got the helper entry under the wrong runtime target), and **patch 7** replaces
-eM Client 11's native license crypto with BouncyCastle so activation works under Wine. See
-[emclient11-1267-stable-port-findings.md](reports/emclient11-1267-stable-port-findings.md) and
-[emclient11-license-ecdsa-findings.md](reports/emclient11-license-ecdsa-findings.md). The older
+installs otherwise got the helper entry under the wrong runtime target), **patch 7** replaces
+eM Client 11's native license crypto with BouncyCastle so activation works under Wine, and
+**patch 8** fills in optional Matrix room sections that some homeservers (e.g. Beeper) omit, which
+eM Client's model otherwise rejects as missing required properties. See
+[emclient11-1267-stable-port-findings.md](reports/emclient11-1267-stable-port-findings.md),
+[emclient11-license-ecdsa-findings.md](reports/emclient11-license-ecdsa-findings.md), and
+[emclient11-matrix-beeper-sync-findings.md](reports/emclient11-matrix-beeper-sync-findings.md). The older
 beta line (`releases/11.0.196-beta/`, covering 11.0.196 and 11.0.282) is kept as a frozen
 historical reference; use `releases/11.0.1267/` for current installs.
 
@@ -124,8 +127,8 @@ Identical flag set to the 10.4.5674 script above, file-associations flags includ
 `--no-fonts`, `--install-associations`, `--no-associations`, `--force-associations`,
 `--wine-manager crossover|bottles`, `-h`/`--help` all work identically — though which bugs land
 in which patch number is its own, independently-curated grouping (see the table below), not the
-same numbering as the 10.4.5674 script's own patches. Patches 1–4, 6, and 7 are mandatory; patch 5
-is optional.
+same numbering as the 10.4.5674 script's own patches. Patches 1–4, 6, 7, and 8 are mandatory;
+patch 5 is optional.
 
 | Patch # | Bug | Root cause | Report |
 |---|---|---|---|
@@ -138,6 +141,7 @@ is optional.
 | 6 | Font-family dropdown (and other nested combo dropdowns) rendered underneath its own parent popup | Wine never establishes a real native window-owner relationship the app's popup code asks for; fixed by asserting it explicitly instead | [floating-popup-zorder-findings.md](reports/floating-popup-zorder-findings.md) |
 | 6 | Opening the standard color picker from inside a floating popup closed the popup instead of leaving it open behind the dialog | A global WinForms filter auto-closes any popup it doesn't recognize as owning the newly-active window — same root cause as the dropdown bug above | [floating-popup-zorder-findings.md](reports/floating-popup-zorder-findings.md) |
 | 7 | License activation silently failed — spinner, then nothing; the license never activated | Wine's CNG/bcrypt cannot import the license server's ECDSA P-256 key (`0x80090029`), so eM Client's v2 license signature check fails; older RSA-OAEP formats hit the same Wine defect fixed for eM Client 10. Both are replaced with pure-managed BouncyCastle crypto | [emclient11-license-ecdsa-findings.md](reports/emclient11-license-ecdsa-findings.md) |
+| 8 | Matrix account showed a red warning and listed no chats, even though login/avatar/session worked | Beeper's homeserver omits optional `account_data`, `summary`, and `ephemeral` sections on many rooms; eM Client's `RoomInfo` marks them `required`, so `System.Text.Json` rejected the whole `/sync` response. Missing sections are filled with their spec-defined empty shape before deserialization | [emclient11-matrix-beeper-sync-findings.md](reports/emclient11-matrix-beeper-sync-findings.md) |
 
 Patch 5 bundles both sync-freeze fixes together — they're decided and applied as one unit
 (`--patches 5` includes both; there's no way to request just one).

@@ -34,7 +34,7 @@
 #                                   default to NOT included; use --patches (below) to include it
 #                                   non-interactively instead.
 #   ./deploy.sh --force             skip the "already patched, nothing to do" short-circuit
-#   ./deploy.sh --max-revision N    cap the MANDATORY patches at patch N (0..7) instead of this
+#   ./deploy.sh --max-revision N    cap the MANDATORY patches at patch N (0..8) instead of this
 #                                   script's own latest mandatory patch (PIPELINE_LATEST_PATCH) --
 #                                   patch 5 is optional and sits below the latest mandatory patch in number, so
 #                                   --max-revision never implies it either way regardless of N.
@@ -124,7 +124,7 @@ set -euo pipefail
 # already at patch 6 then, because it's the first tagged release for that eM Client build, not
 # because fewer stages apply to it; 11.0.1389 similarly starts at 1. Bump an existing entry's
 # number when you tag a new release against a version that was already supported.
-declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=2 ["11.0.1389"]=1 )
+declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=3 ["11.0.1389"]=2 )
 
 # Each internal STAGE tracks as its OWN bit in a single mask, stored directly as the on-bottle
 # MailClient.Wine.dll marker's FileVersion trailing component -- e.g. a bottle with Stages
@@ -137,7 +137,7 @@ declare -A OUR_RELEASE_NUMBER_FOR_VERSION=( ["11.0.1267"]=2 ["11.0.1389"]=1 )
 # Deliberately no migration from the older, pre-bitmask linear-count scheme this same marker
 # field used to hold -- see the header comment's own note. A bottle patched by an older script
 # needs a pristine reset before this version touches it.
-declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 [9]=256 )
+declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 [9]=256 [10]=512 )
 
 # PATCH is the externally-facing unit -- what --patches/--max-revision take, what README.md's
 # patch table documents, what a user thinks of as "patch N". It's a curated, THEMATIC grouping of
@@ -159,6 +159,9 @@ declare -A STAGE_BIT=( [1]=1 [2]=2 [3]=4 [4]=8 [6]=32 [7]=64 [8]=128 [9]=256 )
 #                        formats -- same family as the sibling's own patch 3/Stage 5, but eM Client
 #                        11's v2 format needs a managed ECDsa, not just RSA; see
 #                        reports/emclient11-license-ecdsa-findings.md)
+#   8 = stage 10        (Matrix /sync JSON compatibility: fill in optional room sections Beeper
+#                        omits, which eM Client's model marks required; see
+#                        reports/emclient11-matrix-beeper-sync-findings.md)
 declare -A PATCH_STAGES=(
     [1]="2"
     [2]="4"
@@ -167,6 +170,7 @@ declare -A PATCH_STAGES=(
     [5]="6 7"
     [6]="8"
     [7]="9"
+    [8]="10"
 )
 # Highest MANDATORY patch number this script builds by default -- shared across every supported
 # eM Client version above. This (not OUR_RELEASE_NUMBER_FOR_VERSION) is what controls how far a
@@ -175,8 +179,8 @@ declare -A PATCH_STAGES=(
 # chain despite its number being lower than this constant. Always consult MANDATORY_PATCHES
 # (below), never assume "1..PIPELINE_LATEST_PATCH" is a contiguous mandatory range -- it isn't,
 # on purpose.
-PIPELINE_LATEST_PATCH=7
-MANDATORY_PATCHES=(1 2 3 4 6 7)
+PIPELINE_LATEST_PATCH=8
+MANDATORY_PATCHES=(1 2 3 4 6 7 8)
 
 MANDATORY_MASK=0
 for _p in "${MANDATORY_PATCHES[@]}"; do
@@ -1183,6 +1187,7 @@ if (( TARGET_MASK & STAGE_BIT[7] )); then
         cp "$IL_PATCHES_DIR/MailClient.Wine/VersionMarker.cs" \
            "$IL_PATCHES_DIR/MailClient.Wine/DnsConnectHelper.cs" \
            "$IL_PATCHES_DIR/MailClient.Wine/TokenRefreshRetryHelper.cs" \
+           "$IL_PATCHES_DIR/MailClient.Wine/MatrixJsonDefaults.cs" \
            "$WORKDIR/tools/MailClient.Wine.Full/"
         # A fresh csproj, NOT a copy of the shared net8.0 one -- same reasoning and same pattern
         # as the font-systemlink-writer step below builds its own net10.0 csproj rather than
@@ -1354,6 +1359,92 @@ else
     log "Stage 9 skipped -- not targeted this run."
 fi
 
+# ---------------------------------------------------------------------------
+# Stage 10 (patch 8, MANDATORY): Matrix /sync JSON compatibility.
+#
+# MailClient.Protocols.Matrix.RoomInfo marks timeline/state/account_data/ephemeral/
+# unread_notifications/summary as C# `required`, and its source-generated System.Text.Json
+# metadata rejects the WHOLE /sync response if a room omits any of them. The Matrix spec makes
+# those sections optional, and Beeper's homeserver legitimately omits account_data/summary on
+# many rooms (a real captured response: 30/149 rooms no account_data, 29/149 no summary, 6/149
+# no ephemeral). eM Client then fails its initial sync, never sets SyncToken, shows the red
+# warning/offline state, and lists no chats -- while login/avatar/whoami still work.
+#
+# Fixed by pre-processing only SyncResponse JSON in MatrixClient.Deserialize<T>: missing sections
+# are filled with their spec-defined empty shape by MatrixJsonDefaults (in MailClient.Wine.dll)
+# before the existing deserializer sees them. The MailClient.Wine helper is rebuilt here so an
+# already-stage-7 install also picks up the new method, and its deps.json entry is (re)asserted.
+# See reports/emclient11-matrix-beeper-sync-findings.md.
+# ---------------------------------------------------------------------------
+
+if (( NEEDS_WORK_MASK & STAGE_BIT[10] )); then
+    log "Stage 10: Matrix /sync JSON compatibility fix (Beeper-style optional room sections)..."
+    mkdir -p "$WORKDIR/tools/MailClient.Wine.Matrix"
+    cp "$IL_PATCHES_DIR/MailClient.Wine/VersionMarker.cs" \
+       "$IL_PATCHES_DIR/MailClient.Wine/DnsConnectHelper.cs" \
+       "$IL_PATCHES_DIR/MailClient.Wine/TokenRefreshRetryHelper.cs" \
+       "$IL_PATCHES_DIR/MailClient.Wine/MatrixJsonDefaults.cs" \
+       "$WORKDIR/tools/MailClient.Wine.Matrix/"
+    cat > "$WORKDIR/tools/MailClient.Wine.Matrix/MailClient.Wine.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MailClient.Wine</RootNamespace>
+    <AssemblyName>MailClient.Wine</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="MailClient.Accounts">
+      <HintPath>$BOTTLE_APP_DIR/MailClient.Accounts.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
+EOF
+    dotnet build -c Release \
+        -p:AssemblyVersion="$RELEASE_VERSION.0" \
+        -p:FileVersion="$RELEASE_VERSION.$NEW_MASK" \
+        "$WORKDIR/tools/MailClient.Wine.Matrix" >"$WORKDIR/build-mailclient-wine-matrix.log" 2>&1 \
+        || { cat "$WORKDIR/build-mailclient-wine-matrix.log" >&2; die "failed to build MailClient.Wine for the Matrix fix (log above)"; }
+    MATRIX_WINE_DLL="$WORKDIR/tools/MailClient.Wine.Matrix/bin/Release/net10.0/MailClient.Wine.dll"
+
+    log "building matrix-sync-json-patcher..."
+    mkdir -p "$WORKDIR/tools/matrix-sync-json-patcher"
+    cp "$IL_PATCHES_DIR/matrix-sync-json-patcher-Program.cs" "$WORKDIR/tools/matrix-sync-json-patcher/Program.cs"
+    cat > "$WORKDIR/tools/matrix-sync-json-patcher/matrix-sync-json-patcher.csproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>matrix_sync_json_patcher</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+  </ItemGroup>
+</Project>
+EOF
+    dotnet build -c Release "$WORKDIR/tools/matrix-sync-json-patcher" >"$WORKDIR/build-matrix-sync-json-patcher.log" 2>&1 \
+        || { cat "$WORKDIR/build-matrix-sync-json-patcher.log" >&2; die "failed to build matrix-sync-json-patcher (log above)"; }
+    ILP4="dotnet $WORKDIR/tools/matrix-sync-json-patcher/bin/Release/net10.0/matrix-sync-json-patcher.dll"
+
+    mkdir -p "$WORKDIR/output-stage10"
+    $ILP4 "$FINAL_DIR/MailClient.Protocols.Matrix.dll" "$MATRIX_WINE_DLL" "$WORKDIR/output-stage10/MailClient.Protocols.Matrix.dll"
+    cp -an "$FINAL_DIR"/. "$WORKDIR/output-stage10/"
+    cp "$MATRIX_WINE_DLL" "$WORKDIR/output-stage10/"
+    prune_stage_output "$FINAL_DIR"
+    FINAL_DIR="$WORKDIR/output-stage10"
+    MAILCLIENT_WINE_DLL_OVERRIDE="$MATRIX_WINE_DLL"
+elif (( INSTALLED_MASK & STAGE_BIT[10] )); then
+    log "Stage 10 (Matrix /sync JSON compatibility) already applied -- using the installed files as-is."
+    MAILCLIENT_WINE_DLL_OVERRIDE="$WORKDIR/original/MailClient.Wine.dll"
+else
+    log "Stage 10 skipped -- not targeted this run."
+fi
+
 # Both Cecil patch invocations (any stage, not just Stage 7) only ever copy *.dll files forward --
 # non-dll files like MailClient.deps.json never make it into a stage's own output directory.
 # Backfill everything ELSE from $WORKDIR/original (the one directory guaranteed to hold a
@@ -1400,6 +1491,18 @@ if (( NEEDS_WORK_MASK & STAGE_BIT[9] )); then
     python3 "$IL_PATCHES_DIR/license-oaep-patcher-patch-deps-json.py" \
         "$FINAL_DIR/MailClient.deps.json" "MailClient.Licensing.BouncyCastlePatch" "1.0.0" "$DEPS_TARGET_KEY" \
         || die "failed to patch MailClient.deps.json for MailClient.Licensing.BouncyCastlePatch (Stage 9, target $DEPS_TARGET_KEY)"
+fi
+
+if (( NEEDS_WORK_MASK & STAGE_BIT[10] )); then
+    # The Matrix patch makes MailClient.Protocols.Matrix reference MailClient.Wine directly;
+    # assert its deps.json entry here too, so --patches 8 works even on a bottle that (for
+    # whatever reason) doesn't already carry stage 7's entry. Idempotent when already present.
+    command -v python3 >/dev/null 2>&1 || die "python3 is required for Stage 10 (patching MailClient.deps.json) but wasn't found"
+    DEPS_TARGET_KEY=$(deps_json_target_key "$FINAL_DIR/MailClient.deps.json") || die "couldn't read runtimeTarget.name from MailClient.deps.json"
+    [[ -n "$DEPS_TARGET_KEY" ]] || die "MailClient.deps.json has an empty runtimeTarget.name"
+    python3 "$IL_PATCHES_DIR/license-oaep-patcher-patch-deps-json.py" \
+        "$FINAL_DIR/MailClient.deps.json" "MailClient.Wine" "$RELEASE_VERSION.0" "$DEPS_TARGET_KEY" \
+        || die "failed to patch MailClient.deps.json for MailClient.Wine (Stage 10, target $DEPS_TARGET_KEY)"
 fi
 
 # The version marker (or Stage 7's real functional build of the same filename, when included) is
@@ -1593,6 +1696,25 @@ sys.exit(0 if sys.argv[2] in d['targets'].get(sys.argv[3], {}) else 1)
         || die "verification failed: MailClient.deps.json has no MailClient.Licensing.BouncyCastlePatch/1.0.0 entry under $DEPS_TARGET_KEY -- the license fix won't load at runtime"
 fi
 
+# Stage 10 verification -- only meaningful (and only ran) when Stage 10 actually ran this time.
+if (( NEEDS_WORK_MASK & STAGE_BIT[10] )); then
+    $ILSPY -t "MailClient.Protocols.Matrix.MatrixClient" "$FINAL_DIR/MailClient.Protocols.Matrix.dll" | grep -q "EnsureSyncRequiredFields" \
+        || die "verification failed: MatrixClient.Deserialize doesn't call EnsureSyncRequiredFields -- Matrix /sync fix missing"
+
+    $ILP --find-member "$FINAL_DIR/MailClient.Wine.dll" MatrixJsonDefaults 2>&1 | grep -q "^type .*MatrixJsonDefaults" \
+        || die "verification failed: MailClient.Wine.dll has no MatrixJsonDefaults type -- Matrix fix helper missing"
+
+    $ILP --dump-handlers "$FINAL_DIR/MailClient.Protocols.Matrix.dll" MailClient.Protocols.Matrix.MatrixClient Deserialize 2>&1 | tail -1 | grep -q "^OK:" \
+        || die "verification failed: --dump-handlers reported a handler-ordering violation in MatrixClient.Deserialize"
+
+    python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if sys.argv[2] in d['targets'].get(sys.argv[3], {}) else 1)
+" "$FINAL_DIR/MailClient.deps.json" "MailClient.Wine/$RELEASE_VERSION.0" "$DEPS_TARGET_KEY" \
+        || die "verification failed: MailClient.deps.json has no MailClient.Wine/$RELEASE_VERSION.0 entry under $DEPS_TARGET_KEY -- the Matrix fix helper won't load at runtime"
+fi
+
 log "all verification checks passed."
 
 # ---------------------------------------------------------------------------
@@ -1603,7 +1725,7 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUPS_DIR/${BOTTLE_NAME}-${TIMESTAMP}"
 mkdir -p "$BACKUP_DIR"
 
-DEPLOY_FILES=(MailClient.dll MailClient.Abstractions.dll MailClient.Common.UI.dll MailClient.Accounts.dll MailClient.Wine.dll Licensing.Encryption.dll MailClient.deps.json)
+DEPLOY_FILES=(MailClient.dll MailClient.Abstractions.dll MailClient.Common.UI.dll MailClient.Accounts.dll MailClient.Wine.dll Licensing.Encryption.dll MailClient.Protocols.Matrix.dll MailClient.deps.json)
 [[ -f "$FINAL_DIR/MailClient.Licensing.BouncyCastlePatch.dll" ]] && DEPLOY_FILES+=(MailClient.Licensing.BouncyCastlePatch.dll)
 
 log "backing up current files to $BACKUP_DIR ..."
